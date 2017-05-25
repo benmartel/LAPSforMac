@@ -27,14 +27,15 @@
 #
 # HISTORY
 #
-#	Version: 1.4
+#	Version: 1.6
 #
 #	- 04/29/2016 Created by Phil Redfern
 #   - 05/01/2016 Updated by Phil Redfern, added upload verification and local Logging.
 #   - 05/02/2016 Updated by Phil Redfern and John Ross, added keychain update and fixed a bug where no stored LAPS password would cause the process to hang.
 #   - 05/06/2016 Updated by Phil Redfern, improved local logging and increased random passcode length.
 #   - 05/11/2016 Updated by Phil Redfern, removed ambiguous characters from the password generator.
-#
+#   - 04/28/2017 Updated by Ben Martel, Added the passphrase function to the tool. It is calling another policy to install the tool. 
+#   - 05/17/2017 Updated by Ben Martel, Added a fix for char not suported by HTML and XML
 #   - This script will randomize the password of the specified user account and post the password to the LAPS Extention Attribute in Casper.
 #
 ####################################################################################################
@@ -63,23 +64,21 @@ if [ "$6" != "" ] && [ "$resetUser" == "" ];then
 resetUser=$6
 fi
 
-apiURL="https://jss.acme.com:8443"
+apiURL="URL HERE"
 LogLocation="/Library/Logs/Casper_LAPS.log"
 
-newPass=$(openssl rand -base64 10 | tr -d OoIi1lLS | head -c12;echo)
-####################################################################
-#
-#            ┌─── openssl is used to create
-#            │	a random Base64 string
-#            │                    ┌── remove ambiguous characters
-#            │                    │
-# ┌──────────┴──────────┐	  ┌───┴────────┐
-# openssl rand -base64 10 | tr -d OoIi1lLS | head -c12;echo
-#                                            └──────┬─────┘
-#                                                   │
-#             prints the first 12 characters  ──────┘
-#             of the randomly generated string
-#
+PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
+
+#Looks for the password generating tool found here: https://github.com/anders/pwgen
+#If it can't find it calls the policy from jamf 
+
+if ! [ -f "/usr/local/bin/sf-pwgen" ]; then
+    jamf policy -trigger "pwgen"
+fi
+#Generates a memorable passphrase. It outputs 1 password and has a length of 15
+newPass=$(sf-pwgen -c 1 -l 15 | sed 's/\\/*/g')
+newPassEscaped=$(echo $newPass | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&#39;/g')
+
 ####################################################################################################
 #
 # SCRIPT CONTENTS - DO NOT MODIFY BELOW THIS LINE
@@ -87,9 +86,9 @@ newPass=$(openssl rand -base64 10 | tr -d OoIi1lLS | head -c12;echo)
 ####################################################################################################
 
 udid=$(/usr/sbin/system_profiler SPHardwareDataType | /usr/bin/awk '/Hardware UUID:/ { print $3 }')
-xmlString="<?xml version=\"1.0\" encoding=\"UTF-8\"?><computer><extension_attributes><extension_attribute><name>LAPS</name><value>$newPass</value></extension_attribute></extension_attributes></computer>"
+xmlString="<?xml version=\"1.0\" encoding=\"UTF-8\"?><computer><extension_attributes><extension_attribute><name>LAPS</name><value>$newPassEscaped</value></extension_attribute></extension_attributes></computer>"
 extAttName="\"LAPS\""
-oldPass=$(curl -s -f -u $apiUser:$apiPass -H "Accept: application/xml" $apiURL/JSSResource/computers/udid/$udid/subset/extension_attributes | xpath "//extension_attribute[name=$extAttName]" 2>&1 | awk -F'<value>|</value>' '{print $2}')
+oldPass=$(curl -s -f -u $apiUser:$apiPass -H "Accept: application/xml" $apiURL/JSSResource/computers/udid/$udid/subset/extension_attributes | xpath "//extension_attribute[name=$extAttName]" 2>&1 | awk -F'<value>|</value>' '{print $2}'| sed 's/\&amp;/\&/g; s/\&lt;/</g; s/\&gt;/>/g; s/\&quot;/"/g; s/\&#39;/'"'"'/g')
 
 # Logging Function for reporting actions
 ScriptLogging(){
@@ -216,8 +215,7 @@ ScriptLogging "Recording new password for $resetUser into LAPS."
 
 sleep 1
 
-LAPSpass=$(curl -s -f -u $apiUser:$apiPass -H "Accept: application/xml" $apiURL/JSSResource/computers/udid/$udid/subset/extension_attributes | xpath "//extension_attribute[name=$extAttName]" 2>&1 | awk -F'<value>|</value>' '{print $2}')
-
+LAPSpass=$(curl -s -f -u $apiUser:$apiPass -H "Accept: application/xml" $apiURL/JSSResource/computers/udid/$udid/subset/extension_attributes | xpath "//extension_attribute[name=$extAttName]" 2>&1 | awk -F'<value>|</value>' '{print $2}' | sed 's/\&amp;/\&/g; s/\&lt;/</g; s/\&gt;/>/g; s/\&quot;/"/g; s/\&#39;/'"'"'/g')
 ScriptLogging "Verifying LAPS password for $resetUser."
 passwdC=`dscl /Local/Default -authonly $resetUser $LAPSpass`
 if [ "$passwdC" == "" ];then
